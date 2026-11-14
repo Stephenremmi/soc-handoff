@@ -2,6 +2,7 @@
 
 from dataclasses import dataclass, field
 from os import environ
+from pathlib import Path
 
 from dotenv import load_dotenv
 
@@ -19,7 +20,8 @@ class Settings:
 
     @classmethod
     def from_environment(cls):
-        load_dotenv()
+        if environ.get("PYTHON_DOTENV_DISABLED", "").lower() not in {"1", "true", "t", "yes", "y"}:
+            load_dotenv(Path(__file__).resolve().parents[2] / ".env", override=False)
         uri = environ.get("MONGODB_URI")
         if not uri:
             raise RuntimeError("Set MONGODB_URI in your local .env file")

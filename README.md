@@ -1,69 +1,108 @@
-# SOC Handoff — Agents You Can Audit
+# SOC Handoff - Agents You Can Audit
 
-One synthetic SOC alert. One proposed action. One real ticket in a separate sandbox tracker. MongoDB Atlas stores the analyst identity, policy, finding, run state, and audit events. An analyst must approve each specific run, and the app records the policy decision in Atlas before calling the tracker.
+One synthetic SOC alert, one analyst-approved action, and one ticket in a separate sandbox tracker. SOC Handoff owns analyst identity, policy, findings, run state, and audit events in MongoDB Atlas. The tracker owns tickets in its own Atlas database and accepts authenticated HTTP requests from SOC Handoff.
 
-See [Architecture](docs/ARCHITECTURE.md) for module boundaries, [AGENTS.md](AGENTS.md) for Codex guidance, and [GitHub setup](GITHUB_SETUP.md) for the first private push.
+The checkout is a working FastAPI MVP with an existing HTML/JavaScript demo. **React/Vite has not been built in this repo.** The owner confirmed Atlas ticket creation and the first successful GitHub Actions run; the private GitHub repository already exists. These baseline confirmations do not establish every target acceptance check.
 
-## Run locally against the event's Atlas Sandbox
+See [architecture and target plan](docs/ARCHITECTURE.md), [contributor guidance](AGENTS.md), and [private GitHub workflow](GITHUB_SETUP.md).
 
-Use Python 3.10 or later. The CI workflow uses Python 3.12. On Windows in Git Bash, open this folder and run:
+## Current local startup
+
+Use Python 3.10 or later (CI uses 3.12). From the repository root, in Windows Git Bash:
 
 ```bash
 python -m venv .venv
 source .venv/Scripts/activate
-python -m pip install -r requirements.txt
+python -m pip install -r backend/requirements.txt
 ```
 
-Copy `.env.example` to `.env` for a fresh setup. If upgrading from the flat MVP, bring over your existing `.env`. Set these values locally:
+PowerShell activation is `.\.venv\Scripts\Activate.ps1`. Copy `.env.example` to `.env` only for a fresh setup; preserve an existing local `.env`. Configure:
 
-- `MONGODB_URI` — The connection string you already used to ping the hackathon Atlas cluster.
-- `MONGODB_DATABASE` — Defaults to `soc_handoff`.
-- `SOC_DEMO_PASSWORD` — A new password for the local demo browser login. The username defaults to `demo-analyst`.
-- `TRACKER_TOKEN` — A separate random value shared by the two local processes for HTTP authentication.
-- `TRACKER_MONGODB_URI` — An Atlas Drivers URI for a separate tracker database user, for example `soc_handoff_tracker_app`. In Atlas, grant this user access to `soc_handoff_tracker` only. In **Specific Privileges**, choose `readWrite` for that database if available, or use a custom role with find, insert, update and create collection privileges scoped to it. Use this URI only for the tracker.
-- `TRACKER_MONGODB_DATABASE` — Defaults to `soc_handoff_tracker`. The tracker creates the `tickets` collection on the first ticket write.
+| Setting | Local value / purpose |
+| --- | --- |
+| `MONGODB_URI` | Atlas URI for the SOC Handoff database user |
+| `MONGODB_DATABASE` | Defaults to `soc_handoff` |
+| `SOC_DEMO_USER` | Defaults to `demo-analyst` |
+| `SOC_DEMO_PASSWORD` | Local analyst login password |
+| `TRACKER_URL` | Defaults to `http://127.0.0.1:8001` |
+| `TRACKER_TOKEN` | Random service bearer token shared by both local processes |
+| `TRACKER_MONGODB_URI` | Atlas URI for a separate user restricted to the tracker database |
+| `TRACKER_MONGODB_DATABASE` | Defaults to `soc_handoff_tracker` |
 
-To generate values, run `python -c "import secrets; print(secrets.token_urlsafe(32))"` twice. Use the directory containing `.env` as the working directory for both processes.
+Generate password/token values separately with `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Grant the tracker user `readWrite` only on its database (or equivalent scoped privileges). The Atlas cluster may host both databases; each service uses its own credentials and connection.
 
-For a fresh Atlas database, run `python setup_demo.py` once. It seeds the synthetic finding in `findings` under its own ID and initializes the `audit_identities`, `audit_policies`, and `audit_runs` collections with Atlas schema validation. The Atlas user needs rights to create those collections and insert demo documents. Running setup on existing demo collections also needs the `collMod` privilege. The seed leaves existing findings and demo policy values intact.
+Both settings modules explicitly resolve the repo-root `.env` from their own file paths, regardless of the working directory. Existing process environment variables take precedence; `PYTHON_DOTENV_DISABLED=1` skips the file entirely. The seed/watch and migration scripts use these same settings. Keep `.env` at the root and ignored; never print its values. Run backend commands from `backend/`:
 
-Run these in separate terminals from the same project folder. Activate the virtual environment in both terminals.
+```bash
+cd backend
+python setup_demo.py
+```
+
+Setup seeds the synthetic finding, identity, and policy and installs validation for `audit_identities`, `audit_policies`, and `audit_runs`. It preserves existing seed values. Initial setup requires collection creation/insertion privileges; updating validators on existing collections also requires `collMod`. The tracker creates `tickets` on its first write.
+
+Activate the root virtual environment in two terminals, run `cd backend` in each, and start both services:
 
 ```text
 python -m uvicorn tracker:app --host 127.0.0.1 --port 8001
 python -m uvicorn app:app --host 127.0.0.1 --port 8000
 ```
 
-Open [the local demo](http://127.0.0.1:8000) and use the demo username and password. Both processes bind to loopback. The tracker is a small, separately authenticated HTTP service with its own MongoDB database and credentials. The Atlas cluster can host both databases. The same run ID always produces the same tracker ticket, including after an interrupted attempt.
+Open [the demo](http://127.0.0.1:8000) and answer the browser's HTTP Basic prompt. Current auth has no application-managed session expiry or reliable sign-out. Both services bind to loopback. [App health](http://127.0.0.1:8000/api/health) and [tracker health](http://127.0.0.1:8001/api/health) return `{"status":"ok"}`; these are liveness checks, with MongoDB pinged at startup. [FastAPI docs](http://127.0.0.1:8000/docs) expose the current API.
 
-The browser presents the local HTTP Basic login prompt. [App liveness](http://127.0.0.1:8000/api/health) and [tracker liveness](http://127.0.0.1:8001/api/health) each return `{"status":"ok"}` after startup. Use [FastAPI docs](http://127.0.0.1:8000/docs) to inspect the API.
+## Walkthrough against the existing Atlas demo
 
-## 60-second walkthrough
+1. Choose **Propose follow-up**, then **Run policy check & execute** before approval. The audit records **Blocked**. **Check tracker** reports no ticket for that run.
+2. Choose **Approve this action**, then execute. Show the approving identity, policy version, **Allowed**, confirmed ticket ID, and open tracker status. Retry execution to reuse the ticket ID.
+3. Reload the URL containing `?run=<id>` to reopen the saved run and audit. This already works in the HTML demo; there is no recent-runs list yet.
+4. Choose **Roll back ticket**, then check the tracker to confirm the same ticket is closed. Creation and closure events remain in the run. A fresh run can instead be stopped before dispatch.
 
-1. Select **Propose follow-up**, then **Run policy check & execute** before approving. The app writes **Blocked** to Atlas. **Check tracker** confirms the tracker has no ticket for the run.
-2. Select **Approve this action**, then **Run policy check & execute**. Show the Atlas policy version, the approving identity, the **Allowed** event, and the resulting ticket ID. **Check tracker** confirms its open status.
-3. Select **Roll back ticket**, then **Check tracker** again. The tracker confirms its closed status, and Atlas retains the ticket creation and close events. To demonstrate stopping, start a fresh run and select **Stop run** before dispatch.
+Optional: `python setup_demo.py watch` in a third terminal prints Atlas change stream notifications. Audit events are embedded in each run document. Keep this local walkthrough on the existing Atlas sandbox, using synthetic data.
 
-Run `python setup_demo.py watch` in a third terminal to see Atlas change stream notifications as demo events are recorded. Atlas stores the full event history within each run document. The local settings and credentials are excluded from Git.
-
-This is a local, single-analyst demo using a deterministic proposal from synthetic evidence. The existing private Sites deployment is a separate prototype.
-
-## Upgrade an existing local demo
-
-Extract this version to a new project folder and copy your existing `.env` locally. If you are upgrading from the SQLite version, add the two `TRACKER_MONGODB_*` settings above. The previous MongoDB version already uses these settings. Use a fresh virtual environment in the new folder and reuse the existing seeded Atlas database for identities, findings, policies, and audit runs.
-
-To keep any existing ticket references usable for the audit demo, stop both old services and import the old ticket file before starting the new services:
+If importing tickets from the older SQLite tracker, stop the old services and run:
 
 ```bash
 python -m scripts.migrate_tracker_tickets "/path/to/old/project/tracker.sqlite3"
 ```
 
-The import reads the old file without modifying it and preserves ticket IDs, statuses and run IDs. It can be repeated without overwriting tickets already stored in MongoDB. For a fresh demo with no existing tickets, start the services and propose a new run.
+This reads the file without changing it and preserves ticket IDs, run IDs, and statuses. Repeating the import keeps matching existing records and rejects identity conflicts. Fresh demos need no import.
 
-## Run tests
+## Current verification
+
+Run from `backend/` with the root virtual environment active:
 
 ```bash
 python -m unittest discover -s tests -p 'test_*.py'
 ```
 
-GitHub Actions uses two databases in a disposable MongoDB instance and runs the full ticket workflow against both HTTP services. See [GitHub setup](GITHUB_SETUP.md) for the first push.
+These unit tests cover tracker confirmation validation and root dotenv resolution, environment precedence, and dotenv-disabled isolation. The separate real-service smoke test needs a **disposable** MongoDB on port 27017. With that instance available, mirror CI from `backend/` (Git Bash):
+
+```bash
+export MONGODB_URI='mongodb://127.0.0.1:27017/?directConnection=true'
+export MONGODB_DATABASE=soc_handoff_ci
+export SOC_DEMO_USER=ci-analyst
+export PYTHON_DOTENV_DISABLED=1
+python setup_demo.py
+python tests/smoke_test.py
+```
+
+Use a separate terminal/environment from the Atlas walkthrough. The smoke harness generates password/token values, uses `soc_handoff_tracker_ci`, and starts both services on ports 18000/18001. CI runs these steps against MongoDB 7.0.32 with synthetic data and no Atlas secrets. It currently has no frontend build or deployment step. See the architecture for coverage gaps.
+
+## Planned structure and local integration
+
+Phase 1 has moved Python assets under `backend/`, keeping `soc_handoff` and `sandbox_tracker` distinct. Root `.env`, `.env.example`, `.gitignore`, `.github/`, and project documentation stay in place. The [migration map and target tree](docs/ARCHITECTURE.md#folder-migration-and-planned-frontend) account for imports, test paths, commands, and CI. Evidence binding, reconciliation, browser sessions, and React/Vite remain **Planned**. Verify both services before creating frontend code.
+
+**Planned frontend commands**, from a separate root terminal after scaffolding:
+
+```bash
+cd frontend
+npm ci
+npm run dev
+# Build the demo bundle
+npm run build
+```
+
+**Planned:** Vite proxies `/api` unchanged to `http://127.0.0.1:8000`; the browser uses one relative-URL API client and never contacts the tracker directly. FastAPI serves `frontend/dist` for the built demo, including SPA routes while preserving API routes and JSON errors. React owns the sign-in form, evidence, recent runs, controls, and audit display. FastAPI remains authoritative.
+
+**Planned sign-in:** exchange the single analyst's configured username/password for an opaque server-side session with a 30-minute absolute expiry. Use an HttpOnly, SameSite=Lax cookie (Secure under HTTPS), CSRF token plus origin checks for writes, and explicit server-side sign-out/revocation. Expiry returns 401; sign-in resumes the saved run by fetching it again. Credentials, tracker token, and MongoDB URIs stay server-side. See [the session design](docs/ARCHITECTURE.md#planned-browser-authentication-and-integration) for proxy and cookie details.
+
+Completion requires the six [target acceptance checks](docs/ARCHITECTURE.md#target-acceptance-checks), including React reload recovery and a frontend build plus both-service CI. Frontend commands and session endpoints remain unimplemented; Phase 1 changes only backend layout, configuration resolution, CI paths, and related verification/documentation.
