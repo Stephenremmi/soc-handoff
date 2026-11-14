@@ -1,0 +1,151 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>SOC Handoff | Action audit</title>
+<style>
+:root{color-scheme:dark;--bg:#10111a;--panel:#191b28;--line:#303246;--text:#f0eef9;--muted:#bbb9cf;--purple:#cab8ff;--green:#88e9c3;--amber:#ffd093}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--text);font:15px/1.55 Inter,system-ui,sans-serif}
+header,main{max-width:1080px;margin:auto;padding:0 22px}
+header{display:flex;align-items:center;justify-content:space-between;gap:12px;padding-top:19px;padding-bottom:19px}
+header strong{font-size:17px}header span,.eyebrow{color:var(--purple);font:600 11px/1.45 ui-monospace,monospace;letter-spacing:.05em}
+.hero{padding:26px;margin-bottom:15px;border:1px solid #4a3965;border-radius:13px;background:radial-gradient(ellipse at top right,#3b265b,#1d1c2f 68%)}
+h1,h2,h3,p{margin:0}h1{font-size:clamp(32px,6vw,51px);line-height:1.1;letter-spacing:-.055em;margin:6px 0}h2{font-size:18px;margin-bottom:7px}h3{font-size:15px;margin:10px 0 3px}
+p{color:var(--muted)}.hero p{max-width:620px}
+.grid{display:grid;grid-template-columns:1fr 1fr;gap:15px;padding-bottom:20px}.panel{background:var(--panel);border:1px solid var(--line);border-radius:11px;padding:17px;min-width:0}
+.card{background:#131521;border:1px solid var(--line);border-radius:8px;margin:10px 0;padding:11px}.card p{font-size:13px}.badge{display:inline-block;padding:2px 7px;border-radius:4px;background:#2d2545;color:var(--purple);font:12px/1.45 ui-monospace,monospace}.badge.verified{background:#1d3734;color:var(--green)}
+.actions{display:flex;gap:7px;flex-wrap:wrap;margin:13px 0}
+button{border:1px solid #53476b;border-radius:6px;padding:8px 10px;background:#2b2540;color:var(--text);line-height:1.4;font-family:inherit;font-size:12px;font-weight:650;cursor:pointer}
+button.primary{background:#7349de;border-color:#8d66f2;color:#fff}
+button:hover{filter:brightness(1.18)}button:disabled{opacity:.5;cursor:default}button:focus-visible{outline:2px solid var(--purple);outline-offset:2px}
+#message{margin:0 0 12px;color:var(--amber)}#message:empty{display:none}
+#audit-list{list-style:none;padding:0;margin:12px 0 0;display:grid;gap:7px}
+#audit-list li{padding:9px 10px;border:1px solid var(--line);background:#131521;border-radius:6px}
+#audit-list strong{display:block;font-size:13px}
+#audit-list p{font-size:12px;margin-top:3px}
+#audit-list time{display:block;color:#aaa6c1;font:11px/1.5 ui-monospace,monospace;margin-top:2px;overflow-wrap:anywhere}
+#audit-list .blocked strong{color:var(--amber)}#audit-list .finished strong{color:var(--green)}
+@media(max-width:720px){.grid{grid-template-columns:1fr}header,main{padding-left:13px;padding-right:13px}}
+</style>
+</head>
+<body>
+<header><strong>SOC Handoff</strong><span>SANDBOX · SYNTHETIC DATA</span></header>
+<main>
+<section class="hero"><div class="eyebrow">AGENTS YOU CAN AUDIT</div><h1>Audit a SOC follow-up</h1><p>Trace one ticket from prior-shift evidence through analyst approval, policy enforcement, and the tracker result.</p></section>
+<p id="message" role="status"></p>
+<div class="grid">
+<section class="panel" aria-labelledby="run-heading">
+<h2 id="run-heading">Follow-up action</h2>
+<p>Start with the synthetic MFA alert SOC-1042.</p>
+<div class="card"><span class="badge verified">HUMAN VERIFIED</span><h3>Successful sign-in from an unfamiliar network</h3><p>Prior-shift evidence · IDP-9031</p></div>
+<div class="card" id="proposal" hidden><span id="status" class="badge"></span><h3 id="proposal-title"></h3><p id="run-id"></p><p id="ticket"></p></div>
+<div class="actions" id="actions">
+<button class="primary" data-action="start">Propose follow-up</button>
+<button data-action="approve" hidden>Approve this action</button>
+<button class="primary" data-action="execute" hidden>Run policy check &amp; execute</button>
+<button data-action="stop" hidden>Stop run</button>
+<button data-action="rollback" hidden>Roll back ticket</button>
+<button data-action="ticket" hidden>Check tracker</button>
+</div>
+</section>
+<section class="panel" aria-labelledby="audit-heading"><h2 id="audit-heading">Atlas audit trail</h2><p id="audit-summary">Each decision records who acted, why it happened, and the result.</p><ol id="audit-list"></ol></section>
+</div>
+</main>
+<script>
+const proposal = document.getElementById("proposal");
+const actionBar = document.getElementById("actions");
+const audit = document.getElementById("audit-list");
+const message = document.getElementById("message");
+let run = null;
+let pending = false;
+
+async function request(path, method = "GET") {
+  const response = await fetch(path, {
+    method,
+    headers: { "X-SOC-Action": "interactive", "Accept": "application/json" },
+    cache: "no-store",
+  });
+  const result = await response.json();
+  if (!response.ok) throw new Error(result.detail || "Request failed.");
+  return result;
+}
+
+function render() {
+  const state = run?.status;
+  const controls = {
+    start: !run || ["canceled", "closed"].includes(state),
+    approve: state === "proposed",
+    execute: ["proposed", "approved", "creating"].includes(state),
+    stop: ["proposed", "approved"].includes(state),
+    rollback: ["created", "closing"].includes(state),
+    ticket: Boolean(run),
+  };
+  for (const button of actionBar.querySelectorAll("button")) {
+    button.hidden = !controls[button.dataset.action];
+    button.disabled = pending;
+  }
+  if (!run) return;
+  proposal.hidden = false;
+  document.getElementById("status").textContent = run.status.toUpperCase();
+  document.getElementById("proposal-title").textContent = run.title;
+  document.getElementById("run-id").textContent = "Run " + run._id;
+  document.getElementById("ticket").textContent = run.ticket_id ? "Tracker ticket " + run.ticket_id : "";
+  audit.replaceChildren();
+  for (const event of run.events) {
+    const item = document.createElement("li");
+    if (/blocked|unconfirmed/i.test(event.kind)) item.className = "blocked";
+    if (/ticket created|ticket closed/i.test(event.kind)) item.className = "finished";
+    const label = document.createElement("strong");
+    label.textContent = event.kind;
+    const meta = document.createElement("time");
+    meta.textContent = [
+      new Date(event.at).toLocaleTimeString(), event.actor, event.agent,
+      event.policy_version == null ? null : "Policy v" + event.policy_version,
+      event.ticket_id,
+    ].filter(Boolean).join(" · ");
+    const reason = document.createElement("p");
+    reason.textContent = event.reason;
+    item.append(label, meta, reason);
+    audit.append(item);
+  }
+}
+
+actionBar.addEventListener("click", async (event) => {
+  const action = event.target.closest("button")?.dataset.action;
+  if (!action || pending) return;
+  pending = true;
+  message.textContent = "";
+  render();
+  try {
+    const url = "/api/runs";
+    if (action === "start") {
+      run = await request(url, "POST");
+      history.replaceState(null, "", "/?run=" + run._id);
+    } else if (action === "ticket") {
+      const ticket = await request(url + "/" + run._id + "/ticket");
+      message.textContent = ticket.id + " is " + ticket.status + " in the sandbox tracker.";
+    } else {
+      run = await request(url + "/" + run._id + "/" + action, "POST");
+    }
+  } catch (error) {
+    message.textContent = error.message;
+  } finally {
+    pending = false;
+    render();
+  }
+});
+
+const savedRun = new URLSearchParams(location.search).get("run");
+if (savedRun) {
+  pending = true;
+  render();
+  request("/api/runs/" + encodeURIComponent(savedRun))
+    .then((saved) => { run = saved; })
+    .catch((error) => { message.textContent = error.message; })
+    .finally(() => { pending = false; render(); });
+}
+</script>
+</body>
+</html>

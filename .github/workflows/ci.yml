@@ -1,0 +1,45 @@
+name: SOC Handoff CI
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  integration:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    services:
+      mongodb:
+        image: mongo:7.0.32
+        ports:
+          - 27017:27017
+        options: >-
+          --health-cmd "mongosh --quiet --eval 'quit(db.adminCommand({ping:1}).ok === 1 ? 0 : 1)'"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 12
+    env:
+      MONGODB_URI: mongodb://127.0.0.1:27017/?directConnection=true
+      MONGODB_DATABASE: soc_handoff_ci
+      SOC_DEMO_USER: ci-analyst
+      PYTHON_DOTENV_DISABLED: "1"
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+          cache: pip
+      - name: Install dependencies
+        run: python -m pip install -r requirements.txt
+      - name: Test tracker confirmation
+        run: python -m unittest discover -s tests -p 'test_*.py'
+      - name: Seed synthetic MongoDB data
+        run: python setup_demo.py
+      - name: Test the approved action end to end
+        run: python tests/smoke_test.py
